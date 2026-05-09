@@ -651,12 +651,9 @@ function animKH(){
   });
 }
 
-// MÚSICA
-let aCtx=null,playing=false;
-function startMusic(){
-  if(playing)return;
-  try{ aCtx=new(window.AudioContext||window.webkitAudioContext)(); playing=true; loop(); }catch(e){}
-}
+// MÚSICA — compatible iOS Safari / Chrome móvil / GitHub Pages
+let aCtx=null, playing=false, loopTimeout=null;
+
 const MEL=[
   [440,.55,0],[493.88,.55,.6],[523.25,.55,1.2],[587.33,.9,1.8],
   [523.25,.55,2.75],[493.88,.55,3.35],[440,1.1,3.95],
@@ -673,24 +670,55 @@ const CHORDS=[
   [[174.61,220,261.63],10.4,2.4],[[196,246.94,311.13],13.15,2.4],
   [[220,277.18,329.63],15.85,2.4],[[261.63,329.63,392],19.8,2.4]
 ];
+
 function pNote(f,dur,t,g=0.16){
-  if(!aCtx)return;
-  const o=aCtx.createOscillator(),e=aCtx.createGain(),fl=aCtx.createBiquadFilter();
-  o.type='sine'; o.frequency.setValueAtTime(f,t);
-  fl.type='lowpass'; fl.frequency.value=2200;
-  e.gain.setValueAtTime(0,t);
-  e.gain.linearRampToValueAtTime(g,t+0.06);
-  e.gain.linearRampToValueAtTime(g*0.5,t+dur*0.65);
-  e.gain.linearRampToValueAtTime(0,t+dur);
-  o.connect(fl); fl.connect(e); e.connect(aCtx.destination);
-  o.start(t); o.stop(t+dur+0.05);
+  if(!aCtx||aCtx.state==='closed')return;
+  try{
+    const o=aCtx.createOscillator(),e=aCtx.createGain(),fl=aCtx.createBiquadFilter();
+    o.type='sine'; o.frequency.setValueAtTime(f,t);
+    fl.type='lowpass'; fl.frequency.value=2200;
+    e.gain.setValueAtTime(0,t);
+    e.gain.linearRampToValueAtTime(g,t+0.06);
+    e.gain.linearRampToValueAtTime(g*0.5,t+dur*0.65);
+    e.gain.linearRampToValueAtTime(0,t+dur);
+    o.connect(fl); fl.connect(e); e.connect(aCtx.destination);
+    o.start(t); o.stop(t+dur+0.05);
+  }catch(_){}
 }
-function loop(){
+
+function scheduleLoop(){
   if(!aCtx||!playing)return;
   const now=aCtx.currentTime;
   MEL.forEach(([f,d,dl])=>pNote(f,d,now+dl,0.18));
   CHORDS.forEach(([fs,d,dr])=>fs.forEach(f=>pNote(f,dr,now+d,0.055)));
-  setTimeout(()=>{ if(playing)loop(); },21700);
+  loopTimeout=setTimeout(()=>{ if(playing) scheduleLoop(); },21600);
+}
+
+function startMusic(){
+  if(playing)return;
+  try{
+    // Crear contexto dentro del gesto de usuario (CRÍTICO para iOS)
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC)return;
+    aCtx=new AC();
+    // iOS a veces arranca en "suspended" — forzar resume
+    const kickStart=()=>{
+      if(aCtx.state==='suspended'){
+        aCtx.resume().then(()=>{ playing=true; scheduleLoop(); });
+      } else {
+        playing=true; scheduleLoop();
+      }
+    };
+    // Pequeño buffer silencioso: truco clásico para desbloquear iOS
+    const silentBuf=aCtx.createBuffer(1,1,22050);
+    const silentSrc=aCtx.createBufferSource();
+    silentSrc.buffer=silentBuf;
+    silentSrc.connect(aCtx.destination);
+    silentSrc.start(0);
+    silentSrc.onended=kickStart;
+    // Por si onended no dispara
+    setTimeout(kickStart,100);
+  }catch(e){}
 }
 
 document.getElementById('start-btn').addEventListener('click',function(e){
